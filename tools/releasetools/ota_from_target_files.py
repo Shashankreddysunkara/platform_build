@@ -369,6 +369,8 @@ class Item(object):
     self.CountChildMetadata()
 
     def recurse(item, current):
+      #print >> sys.stderr,"recurse execution starting"
+      
       # current is the (uid, gid, dmode, fmode, selabel, capabilities) tuple
       # that the current item (and all its children) have already been set to.
       # We only need to issue set_perm/set_perm_recursive commands if we're
@@ -377,22 +379,26 @@ class Item(object):
         if current != item.best_subtree:
           script.SetPermissionsRecursive("/"+item.name, *item.best_subtree)
           current = item.best_subtree
-
-        if item.uid != current[0] or item.gid != current[1] or \
+        
+        if (item.uid != current[0] or item.gid != current[1] or \
            item.mode != current[2] or item.selabel != current[4] or \
-           item.capabilities != current[5]:
+           item.capabilities != current[5]) and (item.uid != None and item.gid != None and \
+           None != None and item.selabel != None and item.capabilities != None):
+          #print >> sys.stderr,"first executed"
           script.SetPermissions("/"+item.name, item.uid, item.gid,
                                 item.mode, item.selabel, item.capabilities)
-
+        #print >> sys.stderr,"first not executed"
         for i in item.children:
           recurse(i, current)
       else:
-        if item.uid != current[0] or item.gid != current[1] or \
+        if (item.uid != current[0] or item.gid != current[1] or \
                item.mode != current[3] or item.selabel != current[4] or \
-               item.capabilities != current[5]:
+               item.capabilities != current[5]) and (item.uid != None and item.gid != None and \
+           None != None and item.selabel != None and item.capabilities != None):
+          #print >> sys.stderr,"second executed"
           script.SetPermissions("/"+item.name, item.uid, item.gid,
                                 item.mode, item.selabel, item.capabilities)
-
+        #print >> sys.stderr,"second not executed"
     recurse(self, (-1, -1, -1, -1, None, None))
 
 
@@ -739,8 +745,8 @@ def WriteMetadata(metadata, output_zip):
 
 
 def LoadPartitionFiles(z, partition):
-  """Load all the files from the given partition in a given target-files
-  ZipFile, and return a dict of {filename: File object}."""
+  """Load all the files from the given partition in a given
+  mounter system folder, and return a dict of {filename: File object}."""
   out = {}
   prefix = partition.upper() + "/"
   for info in z.infolist():
@@ -1327,9 +1333,9 @@ class FileDifference(object):
   def __init__(self, partition, source_zip, target_zip, output_zip):
     self.deferred_patch_list = None
     print "Loading target..."
-    self.target_data = target_data = LoadPartitionFiles(target_zip, partition)
+    self.target_data = target_data = LoadPartitionFiles("target", partition)
     print "Loading source..."
-    self.source_data = source_data = LoadPartitionFiles(source_zip, partition)
+    self.source_data = source_data = LoadPartitionFiles("source", partition)
 
     self.verbatim_targets = verbatim_targets = []
     self.patch_list = patch_list = []
@@ -1756,9 +1762,11 @@ else
 
   temp_script = script.MakeTemporary()
   system_items.GetMetadata(target_zip)
+  print >> sys.stderr, "system set permissions start"
   system_items.Get("system").SetPermissions(temp_script)
   if vendor_diff:
     vendor_items.GetMetadata(target_zip)
+    print >> sys.stderr, "vendor set permissions start"
     vendor_items.Get("vendor").SetPermissions(temp_script)
 
   # Note that this call will mess up the trees of Items, so make sure
@@ -1995,17 +2003,22 @@ def main(argv):
 
   # Load the dict file from the zip directly to have a peek at the OTA type.
   # For packages using A/B update, unzipping is not needed.
-  input_zip = zipfile.ZipFile(args[0], "r")
-  OPTIONS.info_dict = common.LoadInfoDict(input_zip)
-  common.ZipClose(input_zip)
+  print "unzipping target target-files..."
+  OPTIONS.input_tmp, input_zip = common.UnzipTemp(args[0])
+  input_zip1 = zipfile.ZipFile(args[0], "r")
+  OPTIONS.info_dict = common.LoadInfoDict(input_zip1, args[0], OPTIONS.input_tmp)
+  common.ZipClose(input_zip1)
 
   ab_update = OPTIONS.info_dict.get("ab_update") == "true"
 
+  #TODO A/B Update
   if ab_update:
-    if OPTIONS.incremental_source is not None:
+    print("A/B update not implemented yet...")
+    """
+	if OPTIONS.incremental_source is not None:
       OPTIONS.target_info_dict = OPTIONS.info_dict
       source_zip = zipfile.ZipFile(OPTIONS.incremental_source, "r")
-      OPTIONS.source_info_dict = common.LoadInfoDict(source_zip)
+      OPTIONS.source_info_dict = common.LoadInfoDict(source_zip, OPTIONS.incremental_source)
       common.ZipClose(source_zip)
 
     if OPTIONS.verbose:
@@ -2023,15 +2036,14 @@ def main(argv):
 
     print "done."
     return
+	"""
 
   if OPTIONS.extra_script is not None:
     OPTIONS.extra_script = open(OPTIONS.extra_script).read()
 
-  print "unzipping target target-files..."
-  OPTIONS.input_tmp, input_zip = common.UnzipTemp(args[0])
-
+  common.Mountext4("system.img", OPTIONS.input_tmp)
   OPTIONS.target_tmp = OPTIONS.input_tmp
-  OPTIONS.info_dict = common.LoadInfoDict(input_zip, OPTIONS.target_tmp)
+  OPTIONS.info_dict = common.LoadInfoDict(input_zip, args[0], OPTIONS.target_tmp, OPTIONS.target_tmp)
 
   if OPTIONS.verbose:
     print "--- target info ---"
@@ -2044,13 +2056,15 @@ def main(argv):
   # info dict and look for that in the local filesystem, relative to
   # the current directory.
 
-  if OPTIONS.device_specific is None:
-    from_input = os.path.join(OPTIONS.input_tmp, "META", "releasetools.py")
-    if os.path.exists(from_input):
-      print "(using device-specific extensions from target_files)"
-      OPTIONS.device_specific = from_input
-    else:
-      OPTIONS.device_specific = OPTIONS.info_dict.get("tool_extensions", None)
+  #TODO - not needed
+  
+  # if OPTIONS.device_specific is None:
+    # from_input = os.path.join(OPTIONS.input_tmp, "META", "releasetools.py")
+    # if os.path.exists(from_input):
+      # print "(using device-specific extensions from target_files)"
+      # OPTIONS.device_specific = from_input
+    # else:
+      # OPTIONS.device_specific = OPTIONS.info_dict.get("tool_extensions", None)
 
   if OPTIONS.device_specific is not None:
     OPTIONS.device_specific = os.path.abspath(OPTIONS.device_specific)
@@ -2097,9 +2111,9 @@ def main(argv):
     print "unzipping source target-files..."
     OPTIONS.source_tmp, source_zip = common.UnzipTemp(
         OPTIONS.incremental_source)
+    common.Mountext4("system.img", OPTIONS.source_tmp)
     OPTIONS.target_info_dict = OPTIONS.info_dict
-    OPTIONS.source_info_dict = common.LoadInfoDict(source_zip,
-                                                   OPTIONS.source_tmp)
+    OPTIONS.source_info_dict = common.LoadInfoDict(source_zip, OPTIONS.incremental_source, OPTIONS.source_tmp, OPTIONS.source_tmp)
     if OPTIONS.verbose:
       print "--- source info ---"
       common.DumpInfoDict(OPTIONS.source_info_dict)

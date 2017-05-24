@@ -37,12 +37,12 @@ from hashlib import sha1 as sha1
 class Options(object):
   def __init__(self):
     platform_search_path = {
-        "linux2": "out/host/linux-x86",
-        "darwin": "out/host/darwin-x86",
+        "linux2": "",
+        "darwin": "",
     }
 
     self.search_path = platform_search_path.get(sys.platform, None)
-    self.signapk_path = "framework/signapk.jar"  # Relative to search_path
+    self.signapk_path = "signapk.jar"  # Relative to search_path
     self.signapk_shared_library_path = "lib64"   # Relative to search_path
     self.extra_signapk_args = []
     self.java_path = "java"  # Use the one on the path by default.
@@ -65,6 +65,8 @@ class Options(object):
     # Stash size cannot exceed cache_size * threshold.
     self.cache_size = None
     self.stash_threshold = 0.8
+    self.modem_update = None
+    self.uboot_update = None
 
 
 OPTIONS = Options()
@@ -108,8 +110,8 @@ class ExternalError(RuntimeError):
 def Run(args, **kwargs):
   """Create and return a subprocess.Popen object, printing the command
   line on the terminal if -v was specified."""
-  if OPTIONS.verbose:
-    print "  running: ", " ".join(args)
+  # if OPTIONS.verbose:
+  print "  running: ", " ".join(args)
   return subprocess.Popen(args, **kwargs)
 
 
@@ -129,7 +131,7 @@ def CloseInheritedPipes():
       pass
 
 
-def LoadInfoDict(input_file, input_dir=None):
+def LoadInfoDict(input_file, input_name, input_ext_dir ,input_dir=None):
   """Read and parse the META/misc_info.txt key/value pairs from the
   input target files and return a dict."""
 
@@ -256,10 +258,60 @@ def LoadInfoDict(input_file, input_dir=None):
   else:
     d["fstab"] = LoadRecoveryFSTab(read_helper, d["fstab_version"],
                                    d.get("system_root_image", False))
-  d["build.prop"] = LoadBuildProp(read_helper)
+  d["build.prop"] = LoadBuildProp(input_name, input_ext_dir)
   return d
 
-def LoadBuildProp(read_helper):
+def LoadBuildProp(input_name, path):
+  def read_helper(fn):
+    print("read_helper...",input_name, path)
+    
+    sys_path = os.path.join(path,"SYSTEM")
+    img_path = os.path.join(path,"IMAGES/")
+    flag=0
+    if not (os.path.isdir(sys_path)):
+      flag=1
+      print("\nmaking SYSTEM/ folder")
+      cmd = ["mkdir", sys_path]  
+      p = Run(cmd, stdout=subprocess.PIPE)
+      p.wait()
+      p.communicate()
+      if p.returncode != 0:
+        raise ExternalError("creating system folder failed: %s" % (p.returncode,))
+  
+      print("\nmounting SYSTEM...")
+      cmd = ["mount", img_path + "system.img", sys_path]
+      p = Run(cmd, stdout=subprocess.PIPE)
+      p.wait()
+      p.communicate()
+      if p.returncode != 0:
+        raise ExternalError("mount system.img failed: %s" % (p.returncode,))
+    
+    # Run(["ls","-al",path])
+    data = None
+    try:
+      with open(os.path.join(path+"/",fn)) as f:
+        data = f.read()
+    except IOError as e:
+      if e.errno == errno.ENOENT:
+        raise KeyError(fn)
+    
+    if(flag==1):
+      print("\nunmounting SYSTEM...")
+      cmd = ["umount", sys_path]
+      p = Run(cmd, stdout=subprocess.PIPE)
+      p.wait()
+      p.communicate()
+      if p.returncode != 0:
+          raise ExternalError("mount system.img failed: %s" % (p.returncode,))
+    
+      cmd = ["rmdir", sys_path]  
+      p = Run(cmd, stdout=subprocess.PIPE)
+      p.wait()
+      p.communicate()
+      if p.returncode != 0:
+          raise ExternalError("removing system folder failed: %s" % (p.returncode,))
+    return data
+
   try:
     data = read_helper("SYSTEM/build.prop")
   except KeyError:
@@ -693,7 +745,7 @@ def UnzipTemp(filename, pattern=None):
     filename = m.group(1)
   else:
     unzip_to_dir(filename, tmp)
-
+  
   return tmp, zipfile.ZipFile(filename, "r")
 
 
@@ -1808,3 +1860,66 @@ fi
   print "putting script in", sh_location
 
   output_sink(sh_location, sh)
+
+
+def Mountext4(device, path):
+  # print("mountext4:",device, os.path.join(path))
+  
+  temp_path = os.path.join(path,"temp")
+  sys_path = os.path.join(path,"SYSTEM")
+  img_path = os.path.join(path,"IMAGES/")
+  if(os.path.isdir(sys_path) and os.listdir(path)!=[]):
+      return ()
+  #TODO: check if SYSTEM is already mounted or not
+  #elif(not os.path.isdir(sys_path)):
+      # print("removing SYSTEM/ folder")
+      # cmd = ["umount", sys_path]
+      # p = Run(cmd, stdout=subprocess.PIPE)
+      # if p.returncode != 0:
+        # raise ExternalError("unmounting SYSTEM/ failed: %s" % (p.returncode,))
+      # cmd = ["rm", "-r", sys_path]
+      # p = Run(cmd, stdout=subprocess.PIPE)
+      # if p.returncode != 0:
+        # raise ExternalError("deleting SYSTEM/ failed: %s" % (p.returncode,))
+      
+  print("making SYSTEM/ folder")
+  cmd = ["mkdir", temp_path, sys_path]  
+  p = Run(cmd, stdout=subprocess.PIPE)
+  p.communicate()
+  if p.returncode != 0:
+      raise ExternalError("creating temp folder failed: %s" % (p.returncode,))
+  p.wait()
+  
+  print("mounting SYSTEM...")
+  cmd = ["mount", img_path + device, temp_path]
+  p = Run(cmd, stdout=subprocess.PIPE)
+  p.wait()
+  p.communicate()
+  if p.returncode != 0:
+    raise ExternalError("mount system.img failed: %s" % (p.returncode,))
+  
+  cmd = ["cp", "-a", temp_path+"/.", sys_path]
+  p = Run(cmd, stdout=subprocess.PIPE)
+  p.wait()
+  p.communicate()
+  if p.returncode != 0:
+    raise ExternalError("copy to SYSTEM folder failed: %s" % (p.returncode,))
+  
+  print("unmounting SYSTEM...")
+  cmd = ["umount", temp_path]
+  p = Run(cmd, stdout=subprocess.PIPE)
+  p.wait()
+  p.communicate()
+  if p.returncode != 0:
+    raise ExternalError("mount system.img failed: %s" % (p.returncode,))
+  
+
+# def Mountext4(path):
+  # sys_path = os.path.join(path,"SYSTEM")
+  # cmd = ["umount", sys_path]
+  # p = Run(cmd, stdout=subprocess.PIPE)
+  # p.communicate()
+  # if p.returncode != 0:
+    # raise ExternalError("unmount img failed: %s" % (p.returncode,))
+
+# def MakeZip()
