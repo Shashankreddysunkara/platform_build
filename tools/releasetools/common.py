@@ -37,8 +37,8 @@ from hashlib import sha1 as sha1
 class Options(object):
   def __init__(self):
     platform_search_path = {
-        "linux2": "",
-        "darwin": "",
+        "linux2": "tools/",
+        "darwin": "tools/",
     }
 
     self.search_path = platform_search_path.get(sys.platform, None)
@@ -129,7 +129,6 @@ def CloseInheritedPipes():
           os.close(d)
     except OSError:
       pass
-
 
 def LoadInfoDict(input_file, input_name, input_ext_dir ,input_dir=None):
   """Read and parse the META/misc_info.txt key/value pairs from the
@@ -256,14 +255,13 @@ def LoadInfoDict(input_file, input_name, input_ext_dir ,input_dir=None):
   if d.get("no_recovery", False) == "true":
     d["fstab"] = None
   else:
-    d["fstab"] = LoadRecoveryFSTab(read_helper, d["fstab_version"],
+    d["fstab"] = LoadRecoveryFSTab(read_helper, d["fstab_version"], input_ext_dir,
                                    d.get("system_root_image", False))
   d["build.prop"] = LoadBuildProp(input_name, input_ext_dir)
   return d
 
 def LoadBuildProp(input_name, path):
   def read_helper(fn):
-    print("read_helper...",input_name, path)
     
     sys_path = os.path.join(path,"SYSTEM")
     img_path = os.path.join(path,"IMAGES/")
@@ -330,7 +328,7 @@ def LoadDictionaryFromLines(lines):
       d[name] = value
   return d
 
-def LoadRecoveryFSTab(read_helper, fstab_version, system_root_image=False):
+def LoadRecoveryFSTab(read_helper, fstab_version, input_ext_dir, system_root_image=False):
   class Partition(object):
     def __init__(self, mount_point, fs_type, device, length, device2, context):
       self.mount_point = mount_point
@@ -339,7 +337,32 @@ def LoadRecoveryFSTab(read_helper, fstab_version, system_root_image=False):
       self.length = length
       self.device2 = device2
       self.context = context
-
+  """
+  def read_helper2(fn):
+      cwd = os.getcwd()
+      bootimg_path = os.path.join(cwd,"IMAGES","recovery.img")
+      cmd = ["abootimg", "-x", bootimg_path]
+      p = Run(cmd, stdout=subprocess.PIPE)
+	  cmd = ["mkdir", os.path.join(input_ext_dir,"RECOVERY","RAMDISK")]
+	  Run(cmd)
+	  cmd = ["cd", os.path.join(input_ext_dir,"RECOVERY","RAMDISK")]
+	  Run(cmd)
+	  cmd = ["cpio", "-i"]
+	  outp = subprocess.check_output(cmd,stdin=p.stdout)
+      p.wait()
+      p.communicate()
+      if p.returncode != 0:
+        raise ExternalError("abootimg failed: %s" % (p.returncode,))
+	  cmd = ["cd", cwd]
+	  Run(cmd)
+	  path = os.path.join(input_ext_dir,fn.split("/"))
+      try:
+        with open(path) as f:
+          return f.read()
+      except IOError as e:
+        if e.errno == errno.ENOENT:
+          raise KeyError(fn)
+  """
   try:
     data = read_helper("RECOVERY/RAMDISK/etc/recovery.fstab")
   except KeyError:
@@ -1913,13 +1936,22 @@ def Mountext4(device, path):
   if p.returncode != 0:
     raise ExternalError("mount system.img failed: %s" % (p.returncode,))
   
-
-# def Mountext4(path):
-  # sys_path = os.path.join(path,"SYSTEM")
-  # cmd = ["umount", sys_path]
-  # p = Run(cmd, stdout=subprocess.PIPE)
-  # p.communicate()
-  # if p.returncode != 0:
-    # raise ExternalError("unmount img failed: %s" % (p.returncode,))
-
-# def MakeZip()
+def MakeSparseImage(device, path):
+  
+  temp_name = device[:-4]+"_temp.img"
+  img_path = os.path.join(path,"IMAGES/")
+      
+  print("making sparse "+device+" image")
+  cmd = ["mv", img_path+device, img_path+temp_name]  
+  p = Run(cmd, stdout=subprocess.PIPE)
+  p.communicate()
+  if p.returncode != 0:
+      raise ExternalError("file "+device+" renaming failed: %s" % (p.returncode,))
+  p.wait()
+  
+  cmd = ["img2simg", img_path + temp_name, img_path + device]
+  p = Run(cmd, stdout=subprocess.PIPE)
+  p.wait()
+  p.communicate()
+  if p.returncode != 0:
+    raise ExternalError("mount system.img failed: %s" % (p.returncode,))

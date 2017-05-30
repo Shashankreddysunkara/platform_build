@@ -680,6 +680,8 @@ def main(argv):
     print "--- source info ---"
     common.DumpInfoDict(OPTIONS.source_info_dict)
   try:
+    common.MakeSparseImage("system.img",OPTIONS.source_tmp);
+    common.MakeSparseImage("system.img",OPTIONS.target_tmp);
     WriteIncrementalOTAPackage(input_zip, source_zip, output_zip)
     if OPTIONS.log_diff:
       out_file = open(OPTIONS.log_diff, 'w')
